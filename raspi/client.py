@@ -128,9 +128,10 @@ class WebcamClient:
                 logger.info(f"Gemini description received: {description[:200]}...")
                 
                 # Generate and play audio
-                audio = loop.run_until_complete(
-                    self.elevenlabs.generate_speech(description)
-                )
+                if description.get('type') == 'alert':
+                    audio = loop.run_until_complete(
+                        self.elevenlabs.generate_speech(description.get('msg'))
+                    )
                 if audio:
                     try:
                         play(audio)
