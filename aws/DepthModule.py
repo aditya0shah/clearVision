@@ -10,9 +10,6 @@ class DepthModule:
         self.mask = mask
 
         self.depth_map = self.depth_map * (self.mask > 0).astype(np.float32)
-        
-        print(f"depth_map type: {type(self.depth_map)}")
-        
         self.split_depth_map()
     
     def split_depth_map(self):
@@ -30,10 +27,6 @@ class DepthModule:
         return np.mean(column[mask])
     
     def get_buzz_values(self):
-        print(f"Left column: {self.left_column}")
-        print(f"Center column: {self.center_column}")
-        print(f"Right column: {self.right_column}")
-        
         return [1 - self.get_average(self.left_column, (self.left_column > 0) & (self.left_column < self.MAX_DEPTH))/self.MAX_DEPTH, 
                 1 - self.get_average(self.center_column, (self.center_column > 0) & (self.center_column < self.MAX_DEPTH))/self.MAX_DEPTH, 
                 1 - self.get_average(self.right_column, (self.right_column > 0) & (self.right_column < self.MAX_DEPTH))/self.MAX_DEPTH]
