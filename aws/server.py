@@ -5,6 +5,7 @@ import uuid
 import base64
 from datetime import datetime
 from vision_pipeline import VisionPipeline
+from background_worker import BackgroundWorker
 
 app = Flask(__name__)
 
@@ -14,6 +15,27 @@ MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 vision_pipeline = VisionPipeline()
+
+# Initialize background worker (will be started if API keys are provided)
+background_worker = None
+try:
+    gemini_api_key = os.getenv('GEMINI_API_KEY')
+    elevenlabs_api_key = os.getenv('ELEVENLABS_API_KEY')
+    
+    if gemini_api_key and elevenlabs_api_key:
+        background_worker = BackgroundWorker(
+            gemini_api_key=gemini_api_key,
+            elevenlabs_api_key=elevenlabs_api_key,
+            analysis_interval=5.0,  # Analyze every 5 seconds
+            enabled=True
+        )
+        background_worker.start()
+        print("Background worker started with Gemini and ElevenLabs integration")
+    else:
+        print("Background worker disabled - missing API keys (GEMINI_API_KEY, ELEVENLABS_API_KEY)")
+except Exception as e:
+    print(f"Failed to initialize background worker: {e}")
+    background_worker = None
 
 def allowed_file(filename):
     """Check if the uploaded file has an allowed extension."""
@@ -51,6 +73,19 @@ def upload_image():
             
             # Process image through vision pipeline directly from memory
             vision_results = vision_pipeline.process_image(file)
+            
+            # Update latest frame for background analysis (non-blocking)
+            if background_worker:
+                try:
+                    # Reset file pointer and get image bytes for background processing
+                    file.seek(0)
+                    image_bytes = file.read()
+                    background_worker.update_latest_frame(image_bytes, {
+                        'frame_number': frame_number if 'frame_number' in locals() else 0,
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                except Exception as e:
+                    print(f"Failed to update latest frame for background analysis: {e}")
             
             # Extract processed image if available
             processed_image_data = None
@@ -91,6 +126,50 @@ def health():
         'timestamp': datetime.utcnow().isoformat()
     }), 200
 
+@app.route('/background/stats', methods=['GET'])
+def background_stats():
+    """Get background worker statistics."""
+    if background_worker:
+        return jsonify({
+            'success': True,
+            'background_worker': background_worker.get_stats()
+        }), 200
+    else:
+        return jsonify({
+            'success': False,
+            'message': 'Background worker not available'
+        }), 404
+
+@app.route('/background/control', methods=['POST'])
+def background_control():
+    """Control background worker (enable/disable, change interval)."""
+    if not background_worker:
+        return jsonify({
+            'success': False,
+            'message': 'Background worker not available'
+        }), 404
+    
+    try:
+        data = request.get_json() or {}
+        
+        if 'enabled' in data:
+            background_worker.set_enabled(data['enabled'])
+        
+        if 'analysis_interval' in data:
+            background_worker.set_analysis_interval(data['analysis_interval'])
+        
+        return jsonify({
+            'success': True,
+            'message': 'Background worker settings updated',
+            'stats': background_worker.get_stats()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
 @app.route('/', methods=['GET'])
 def home():
     """Home endpoint with API information."""
@@ -99,11 +178,13 @@ def home():
         'endpoints': {
             'POST /upload': 'Upload and process an image file',
             'GET /health': 'Health check',
-            'GET /vision/stats': 'Get vision pipeline statistics',
+            'GET /background/stats': 'Get background worker statistics',
+            'POST /background/control': 'Control background worker settings',
             'GET /': 'This information'
         },
         'allowed_file_types': list(ALLOWED_EXTENSIONS),
-        'max_file_size': f"{MAX_CONTENT_LENGTH // (1024 * 1024)}MB"
+        'max_file_size': f"{MAX_CONTENT_LENGTH // (1024 * 1024)}MB",
+        'background_worker_enabled': background_worker is not None
     }), 200
 
 if __name__ == '__main__':
@@ -117,5 +198,7 @@ if __name__ == '__main__':
         app.run(host='0.0.0.0', port=80, debug=True)
     except KeyboardInterrupt:
         print("\nShutting down server...")
+        if background_worker:
+            background_worker.stop()
         vision_pipeline.cleanup()
         print("Server stopped.")
