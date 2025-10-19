@@ -1,4 +1,18 @@
 # ClearVision RealSense Client
+import pyrealsense2 as rs
+import numpy as np
+import cv2
+import requests
+import io
+import time
+import threading
+import json
+import os
+from BLE import BLEWrapper
+from asyncio.streams import logger
+from raspi.modules.elevenlabs import ElevenLabs
+from raspi.modules.gemini_vision import GeminiVision
+# ClearVision RealSense Client
 import asyncio
 from sys import modules
 from elevenlabs.play import play
@@ -12,9 +26,8 @@ import time
 import subprocess
 import threading
 import json
+import os
 
-from raspi.modules.elevenlabs import ElevenLabs
-from raspi.modules.gemini_vision import GeminiVision
 
 pipeline = rs.pipeline()
 config = rs.config()
@@ -26,44 +39,55 @@ pipeline.start(config)
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # Get from environment variable
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
 
+
 # HTTP endpoint configuration
 API_ENDPOINT = "http://ec2-44-242-141-44.us-west-2.compute.amazonaws.com:80/upload"  # Change this to your actual endpoint
 
 # BLE configuration
 BLE_DEVICE_NAME = "FeatherBLE-Haptics"
-BLE_PATTERN = "constant"
-BLE_HZ = 10.0
-BLE_SECONDS = 0  # Run forever
 
-gemini_vision = modules.gemini_vision.GeminiVision(GEMINI_API_KEY)
-elevenlabs = modules.elevenlabs.ElevenLabs(ELEVENLABS_API_KEY)
+# Initialize BLE device
+ble_device = None
+try:
+    ble_device = BLEWrapper(device_name=BLE_DEVICE_NAME)
+    ble_device.connect()
+    print("BLE device connected successfully")
+except Exception as e:
+    print(f"Error connecting to BLE device: {e}")
+    ble_device = None
+    
 
-# Global variable to store current buzz values
-current_buzz_values = [0, 10, 0]  # Default values
+gemini_vision = GeminiVision(GEMINI_API_KEY)
+elevenlabs = ElevenLabs(ELEVENLABS_API_KEY)
 
 def send_buzz_values_to_ble(buzz_values):
-    """Send buzz values to BLE device using the constant pattern"""
-    global current_buzz_values
+    """Send buzz values to BLE device using the BLE class"""
+    global ble_device
     
-    # Convert buzz values (0-1 range) to 0-10 range for BLE
-    a = int(round(buzz_values[0] * 10)) if len(buzz_values) > 0 else 0
-    b = int(round(buzz_values[1] * 10)) if len(buzz_values) > 1 else 0  
-    c = int(round(buzz_values[2] * 10)) if len(buzz_values) > 2 else 0
+    if ble_device is None:
+        print("BLE device not available")
+        return
     
-    # Clamp values to 0-10 range
-    a = max(0, min(10, a))
-    b = max(0, min(10, b))
-    c = max(0, min(10, c))
-    
-    current_buzz_values = [a, b, c]
-    print(f"Sending buzz values to BLE: {current_buzz_values}")
-    
-    # Write buzz values to a file for BLE script to read
     try:
-        with open('buzz_values.txt', 'w') as f:
-            f.write(f"{a} {b} {c}")
+        # Convert buzz values (0-1 range) to 0-10 range for BLE
+        a = int(round(buzz_values[0] * 10)) if len(buzz_values) > 0 else 0
+        b = int(round(buzz_values[1] * 10)) if len(buzz_values) > 1 else 0  
+        c = int(round(buzz_values[2] * 10)) if len(buzz_values) > 2 else 0
+        
+        # Clamp values to 0-10 range
+        a = max(0, min(10, a))
+        b = max(0, min(10, b))
+        c = max(0, min(10, c))
+        
+        print(f"Sending buzz values to BLE: {a} {b} {c}")
+        
+        # Send buzz values directly to BLE device
+        ble_device.buzz([a/10.0, b/10.0, c/10.0])  # Convert back to 0-1 range for BLE class
+        
     except Exception as e:
-        print(f"Error writing buzz values to file: {e}")
+        print(f"Error sending buzz values to BLE: {e}")
+        
+
 
 def call_vlm_async(color_bytes: bytes, g: GeminiVision, e: ElevenLabs):
     try:
@@ -76,10 +100,13 @@ def call_vlm_async(color_bytes: bytes, g: GeminiVision, e: ElevenLabs):
             g.describe_image_async(color_bytes)
         )
 
-        description = json.load(description)
+        description = json.loads(description)
+        
+        
+        print(description)
 
         if description:
-            logger.info(f"Gemini description received: {description[:200]}...")
+            logger.info(f"Gemini description received: {str(description)[:200]}...")
             
             # Generate and play audio
             if description.get('type') == 'alert':
@@ -100,25 +127,8 @@ def call_vlm_async(color_bytes: bytes, g: GeminiVision, e: ElevenLabs):
     except Exception as e:
         logger.error(f"Error in async Gemini call: {e}")
     finally:
+        print("Closing loop")
         loop.close()
-
-        
-
-
-# Start BLE process
-ble_process = None
-try:
-    cmd = [
-        "python3", "ble.py",
-        "--name", BLE_DEVICE_NAME,
-        "--pattern", BLE_PATTERN,
-        "--hz", str(BLE_HZ),
-        "--seconds", str(BLE_SECONDS)
-    ]
-    ble_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    print("BLE process started")
-except Exception as e:
-    print(f"Error starting BLE process: {e}")
 
 try:
     align_to = rs.stream.color
@@ -147,8 +157,7 @@ try:
             # Encode color image to JPEG
             _, color_buffer = cv2.imencode('.jpg', color_image)
             color_bytes = color_buffer.tobytes()
-            if (i % 100 == 0):
-                call_vlm_async(color_bytes, gemini_vision, elevenlabs)
+            
             # Prepare depth data as JPEG image
             # Normalize depth to 0-255 range for JPEG
             depth_normalized = cv2.convertScaleAbs(depth_image, alpha=255.0/6000.0)  # Scale to 0-255, max 10m
@@ -157,6 +166,9 @@ try:
             depth_size = len(depth_bytes)
             
             print(f"Depth data size: {depth_size:,} bytes ({depth_size/1024:.1f} KB)")
+            
+            if (i % 2 == 0):
+                call_vlm_async(color_bytes, gemini_vision, elevenlabs)
             
             # Create files dictionary for multipart form data
             files = {
@@ -201,4 +213,13 @@ try:
         
         i += 1  # Increment frame counter
 finally:
-    pipeline.stop()
+    # Clean up BLE device
+    if ble_device is not None:
+        try:
+            ble_device.stop_buzz()  # Stop all buzzers
+            print(f"Stopped buzzers")
+            print(f"Disconnecting BLE device")
+            ble_device.disconnect()
+            print(f"Disconnected BLE device")
+        except Exception as e:
+            print(f"Error disconnecting BLE device: {e}")
