@@ -23,8 +23,8 @@ def allowed_file(filename):
 @app.route('/upload', methods=['POST'])
 def upload_image():
     """
-    Endpoint to handle image uploads.
-    Accepts multipart/form-data with 'image' field.
+    Endpoint to handle image and depth file uploads.
+    Accepts multipart/form-data with 'image' field and optional 'depth' field.
     """
     try:
         # Check if the post request has the file part
@@ -35,6 +35,7 @@ def upload_image():
             }), 400
         
         file = request.files['image']
+        depth_file = request.files.get('depth')  # Optional depth file
         
         # If user does not select file, browser also submits an empty part without filename
         if file.filename == '':
@@ -50,7 +51,7 @@ def upload_image():
             file.seek(0)  # Reset file pointer to beginning
             
             # Process image through vision pipeline directly from memory
-            vision_results = vision_pipeline.process_image(file)
+            vision_results = vision_pipeline.process_image(file, depth_file)
             
             # Extract processed image if available
             processed_image_data = None
