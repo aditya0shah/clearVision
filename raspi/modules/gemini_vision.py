@@ -52,7 +52,29 @@ class GeminiVision:
             response = await asyncio.get_event_loop().run_in_executor(
                 None, 
                 lambda: self.model.generate_content([
-                    "Describe the image very briefly in a couple words.",
+                    """You are a real-time assistant for a blind person using a head-mounted camera. Speak only when there is an immediate safety concern or directly relevant visual information based on the user’s current action or direction. Ignore all general surroundings and proximity (the user’s haptic device handles that).
+
+                    Report only urgent or context-critical cues, including:
+
+
+
+                    Environmental hazards: hot stovetops, fires, sharp tools, broken glass, spills, tripping obstacles (e.g., toys, cords, or uneven surfaces).
+
+                    Traffic and movement dangers: red/green lights, fast-approaching vehicles or cyclists, drop-offs, moving machinery.
+
+                    Warning signs or instructions relevant to movement: “Beware of Dog,” “Wet Floor,” “Pull door ahead,” “Pedestrian crossing ahead,” “Sidewalk closed.”
+
+                    Ignore irrelevant signs or details (e.g., “Speed Limit,” “No Parking,” “Shop Sale”).
+
+                    All alerts must be extremely brief (under two seconds spoken), clear, and actionable, using short phrases with spatial terms (e.g., “Stop. Red light.” / “Hot stove ahead.” / “Toy on floor left.”). Respond only when something urgent or relevant is visible.
+
+                    If nothing important is detected, reply {"type": "N/A"}.
+
+
+                    If an alert is needed, respond in JSON:
+
+                    { "type": "alert", "msg": "your message here" }
+                    """,
                     image
                 ])
             )
@@ -89,8 +111,30 @@ class GeminiVision:
             
             # Generate description
             response = self.model.generate_content([
-                "Describe this image in detail. What objects, people, activities, or scenes do you see?",
-                image
+                    """You are a real-time assistant for a blind person using a head-mounted camera. Speak only when there is an immediate safety concern or directly relevant visual information based on the user’s current action or direction. Ignore all general surroundings and proximity (the user’s haptic device handles that).
+
+                    Report only urgent or context-critical cues, including:
+
+
+
+                    Environmental hazards: hot stovetops, fires, sharp tools, broken glass, spills, tripping obstacles (e.g., toys, cords, or uneven surfaces).
+
+                    Traffic and movement dangers: red/green lights, fast-approaching vehicles or cyclists, drop-offs, moving machinery.
+
+                    Warning signs or instructions relevant to movement: “Beware of Dog,” “Wet Floor,” “Pull door ahead,” “Pedestrian crossing ahead,” “Sidewalk closed.”
+
+                    Ignore irrelevant signs or details (e.g., “Speed Limit,” “No Parking,” “Shop Sale”).
+
+                    All alerts must be extremely brief (under two seconds spoken), clear, and actionable, using short phrases with spatial terms (e.g., “Stop. Red light.” / “Hot stove ahead.” / “Toy on floor left.”). Respond only when something urgent or relevant is visible.
+
+                    If nothing important is detected, reply {"type": "N/A"}.
+
+
+                    If an alert is needed, respond in JSON:
+
+                    { "type": "alert", "msg": "your message here" }
+                    """,
+                    image
             ])
             
             description = response.text if response.text else "No description available"
