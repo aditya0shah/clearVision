@@ -1,5 +1,4 @@
 # ClearVision RealSense Client
-import asyncio
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -9,9 +8,6 @@ import time
 import subprocess
 import threading
 import json
-from elevenlabs.play import play
-
-from raspi.modules import elevenlabs, gemini_vision
 
 pipeline = rs.pipeline()
 config = rs.config()
@@ -56,45 +52,6 @@ def send_buzz_values_to_ble(buzz_values):
     except Exception as e:
         print(f"Error writing buzz values to file: {e}")
 
-def _call_vlm_async(image_bytes: bytes):
-        """Call Gemini API asynchronously in a background thread."""
-        try:
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Run the async Gemini call
-            description = loop.run_until_complete(
-                gemini_vision.describe_image_async(image_bytes)
-            )
-            
-            if description:
-                # logger.info(f"Gemini description received: {description[:200]}...")
-                
-                # Generate and play audio
-                if description.get('type') == 'alert':
-                    audio = loop.run_until_complete(
-                        elevenlabs.generate_speech(description.get('msg'))
-                    )
-                if audio:
-                    try:
-                        play(audio)
-                        # logger.info("Audio played successfully")
-                    except Exception as e:
-                        # logger.error(f"Error playing audio: {e}")
-                        pass
-                else:
-                    # logger.warning("No audio generated")
-                    pass
-            else:
-                # logger.warning("No description received from Gemini")
-                pass
-        except Exception as e:
-            # logger.error(f"Error in async Gemini call: {e}")
-            pass
-        finally:
-            loop.close()
-
 # Start BLE process
 ble_process = None
 try:
@@ -137,8 +94,7 @@ try:
             # Encode color image to JPEG
             _, color_buffer = cv2.imencode('.jpg', color_image)
             color_bytes = color_buffer.tobytes()
-
-            _call_vlm_async(color_bytes)
+            
             # Prepare depth data as JPEG image
             # Normalize depth to 0-255 range for JPEG
             depth_normalized = cv2.convertScaleAbs(depth_image, alpha=255.0/6000.0)  # Scale to 0-255, max 10m
