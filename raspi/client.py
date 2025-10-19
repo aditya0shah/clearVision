@@ -110,7 +110,9 @@ class WebcamClient:
                 daemon=True
             ).start()
         
-        return self.send_image_to_server(image_bytes, frame_number, frame)
+        # You can specify a depth file path here if you have one
+        depth_file_path = None  # Set this to your depth file path if available
+        return self.send_image_to_server(image_bytes, frame_number, frame, depth_file_path)
     
     def _call_vlm_async(self, image_bytes: bytes):
         """Call Gemini API asynchronously in a background thread."""
@@ -152,12 +154,18 @@ class WebcamClient:
         finally:
             loop.close()
     
-    def send_image_to_server(self, image_bytes: bytes, frame_number: int, original_frame) -> cv2.Mat:
-        """Send image to the server and return processed image with bounding boxes."""
+    def send_image_to_server(self, image_bytes: bytes, frame_number: int, original_frame, depth_file_path: str = None) -> cv2.Mat:
+        """Send image and optional depth file to the server and return processed image with bounding boxes."""
         try:
             files = {
                 'image': ('webcam_frame.jpg', io.BytesIO(image_bytes), 'image/jpeg')
             }
+            
+            # Add depth file if provided
+            if depth_file_path and os.path.exists(depth_file_path):
+                with open(depth_file_path, 'rb') as depth_file:
+                    # Send as JPG-serialized depth data
+                    files['depth'] = ('depth_data.jpg', depth_file, 'image/jpeg')
             
             response = requests.post(
                 f"{self.server_url}/upload",
