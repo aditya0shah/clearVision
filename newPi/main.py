@@ -1,4 +1,8 @@
 # ClearVision RealSense Client
+import asyncio
+from sys import modules
+from elevenlabs.play import play
+from asyncio.streams import logger
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -9,12 +13,18 @@ import subprocess
 import threading
 import json
 
+from raspi.modules.elevenlabs import ElevenLabs
+from raspi.modules.gemini_vision import GeminiVision
+
 pipeline = rs.pipeline()
 config = rs.config()
 config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 
 pipeline.start(config)
+
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # Get from environment variable
+ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
 
 # HTTP endpoint configuration
 API_ENDPOINT = "http://ec2-44-242-141-44.us-west-2.compute.amazonaws.com:80/upload"  # Change this to your actual endpoint
@@ -24,6 +34,9 @@ BLE_DEVICE_NAME = "FeatherBLE-Haptics"
 BLE_PATTERN = "constant"
 BLE_HZ = 10.0
 BLE_SECONDS = 0  # Run forever
+
+gemini_vision = modules.gemini_vision.GeminiVision(GEMINI_API_KEY)
+elevenlabs = modules.elevenlabs.ElevenLabs(ELEVENLABS_API_KEY)
 
 # Global variable to store current buzz values
 current_buzz_values = [0, 10, 0]  # Default values
@@ -51,6 +64,46 @@ def send_buzz_values_to_ble(buzz_values):
             f.write(f"{a} {b} {c}")
     except Exception as e:
         print(f"Error writing buzz values to file: {e}")
+
+def call_vlm_async(color_bytes: bytes, g: GeminiVision, e: ElevenLabs):
+    try:
+        # Create new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Run the async Gemini call
+        description = loop.run_until_complete(
+            g.describe_image_async(color_bytes)
+        )
+
+        description = json.load(description)
+
+        if description:
+            logger.info(f"Gemini description received: {description[:200]}...")
+            
+            # Generate and play audio
+            if description.get('type') == 'alert':
+                audio = loop.run_until_complete(
+                    e.generate_speech(description.get('msg'))
+                )
+            if audio:
+                try:
+                    play(audio)
+                    logger.info("Audio played successfully")
+                except Exception as e:
+                    logger.error(f"Error playing audio: {e}")
+            else:
+                logger.warning("No audio generated")
+
+        else:
+            logger.warning("No description received from Gemini")
+    except Exception as e:
+        logger.error(f"Error in async Gemini call: {e}")
+    finally:
+        loop.close()
+
+        
+
 
 # Start BLE process
 ble_process = None
@@ -94,7 +147,8 @@ try:
             # Encode color image to JPEG
             _, color_buffer = cv2.imencode('.jpg', color_image)
             color_bytes = color_buffer.tobytes()
-            
+            if (i % 100 == 0):
+                call_vlm_async(color_bytes, gemini_vision, elevenlabs)
             # Prepare depth data as JPEG image
             # Normalize depth to 0-255 range for JPEG
             depth_normalized = cv2.convertScaleAbs(depth_image, alpha=255.0/6000.0)  # Scale to 0-255, max 10m
