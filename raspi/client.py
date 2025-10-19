@@ -4,7 +4,13 @@ import requests
 import time
 import io
 import logging
+import asyncio
+import threading
 from typing import Optional, Tuple
+import google.generativeai as genai
+from modules.gemini_vision import GeminiVision
+from modules.elevenlabs import ElevenLabs
+from elevenlabs.play import play
 
 # Set environment variable to run OpenCV in headless mode
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
@@ -13,18 +19,27 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+
 class WebcamClient:
-    def __init__(self, server_url: str = "http://localhost:5000", capture_interval: float = 1.0):
+    def __init__(self, server_url: str = "http://localhost:5000", capture_interval: float = 1.0, gemini_api_key: str = None, elevenlabs_api_key: str = None):
         """
         Initialize the webcam client.
         
         Args:
             server_url: URL of the server to send images to
             capture_interval: Time interval between captures in seconds
+            gemini_api_key: Google AI API key for Gemini vision
         """
         self.server_url = server_url
         self.capture_interval = capture_interval
         self.cap: Optional[cv2.VideoCapture] = None
+        
+        # Initialize Modules
+        self.gemini_vision = GeminiVision(api_key=gemini_api_key)
+        self.elevenlabs = ElevenLabs(api_key=elevenlabs_api_key)
+        self.last_vlm_call = 0
+        self.vlm_interval = 10.0  # Call Gemini every 5 seconds
         
     def start_capture(self) -> None:
         """Start capturing from webcam and sending to server."""
@@ -83,7 +98,59 @@ class WebcamClient:
             return frame
         
         image_bytes = buffer.tobytes()
+        
+        # Check if it's time for a Gemini call (every 5 seconds)
+        current_time = time.time()
+        if current_time - self.last_vlm_call >= self.vlm_interval:
+            self.last_vlm_call = current_time
+            # Start async Gemini call in background thread
+            threading.Thread(
+                target=self._call_vlm_async, 
+                args=(image_bytes,), 
+                daemon=True
+            ).start()
+        
         return self.send_image_to_server(image_bytes, frame_number, frame)
+    
+    def _call_vlm_async(self, image_bytes: bytes):
+        """Call Gemini API asynchronously in a background thread."""
+        try:
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Run the async Gemini call
+            description = loop.run_until_complete(
+                self.gemini_vision.describe_image_async(image_bytes)
+            )
+            
+            if description:
+                logger.info(f"Gemini description received: {description[:200]}...")
+                
+                # Generate and play audio
+                audio = loop.run_until_complete(
+                    self.elevenlabs.generate_speech(description)
+                )
+                if audio:
+                    try:
+                        play(audio)
+                        logger.info("Audio played successfully")
+                    except Exception as e:
+                        logger.error(f"Error playing audio: {e}")
+                else:
+                    logger.warning("No audio generated")
+
+            else:
+                logger.warning("No description received from Gemini")
+            
+            
+            
+
+                
+        except Exception as e:
+            logger.error(f"Error in async Gemini call: {e}")
+        finally:
+            loop.close()
     
     def send_image_to_server(self, image_bytes: bytes, frame_number: int, original_frame) -> cv2.Mat:
         """Send image to the server and return processed image with bounding boxes."""
@@ -102,6 +169,7 @@ class WebcamClient:
                 result = response.json()
                 if result.get('success'):
                     logger.debug(f"Frame {frame_number} sent successfully")
+                    print(f"Result: {result} and frame number: {frame_number} sent successfully")
                     vision_data = result.get('data', {}).get('vision_processing')
                     if vision_data:
                         return self.draw_bounding_boxes(original_frame.copy(), vision_data)
@@ -203,9 +271,16 @@ def main() -> None:
     # Configuration
     SERVER_URL = "http://ec2-44-242-141-44.us-west-2.compute.amazonaws.com:80"
     CAPTURE_INTERVAL = 0.1  # More reasonable capture interval
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # Get from environment variable
+    ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')  # Get from environment variable
     
     # Create and start client
-    client = WebcamClient(server_url=SERVER_URL, capture_interval=CAPTURE_INTERVAL)
+    client = WebcamClient(
+        server_url=SERVER_URL, 
+        capture_interval=CAPTURE_INTERVAL,
+        gemini_api_key=GEMINI_API_KEY,
+        elevenlabs_api_key=ELEVENLABS_API_KEY
+    )
     
     # Test server connection first
     if not client.test_server_connection():
